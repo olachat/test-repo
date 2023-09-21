@@ -1,0 +1,74 @@
+name: Deploy
+run-name: "Deployment for ${{inputs.platform}} : Version ${{inputs.build_version}} on ${{github.ref_name}} Branch by ${{github.actor}}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Build for platform(s).
+        required: true
+        type: choice
+        options:
+          - android
+          - ios
+          - both
+        default: "both"
+      build_version:
+        description: App version(eg 3.7.0)
+        required: true
+        type: string
+      
+
+jobs:
+  
+  create-release:
+    runs-on:  [self-hosted, macOS]
+    steps: 
+      - uses: actions/checkout@v3
+      - name: Push tag
+        id: tag_version
+        uses: mathieudutour/github-tag-action@v6.1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          custom_tag: ${{inputs.build_version}}
+      - name: Create a GitHub release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ steps.tag_version.outputs.new_tag }}
+          name: Release ${{ steps.tag_version.outputs.new_tag }}
+          body: ${{ steps.tag_version.outputs.changelog }} # changelog 是 github 自动生成的。
+  next-version-up:
+    name: Increment default versions.
+    runs-on:  [self-hosted, macOS]
+    needs: [create-release]
+    steps: 
+      - uses: actions/checkout@v3
+      - name: Calculate default version
+        id: calc
+        env:
+          CURR_VER: ${{inputs.build_version }}
+        run: |
+          # Split version into major, minor, and patch
+          IFS='.' read -ra version_parts <<< "$CURR_VER"
+          major="${version_parts[0]}"
+          minor="${version_parts[1]}"
+          patch="${version_parts[2]}"
+
+          # Increase minor version 
+          minor=$((minor+1))
+          
+          # Output the new version
+          echo "$major.$minor.$patch"
+          echo "NEXT_VER=$(("$major.$minor.$patch"))" >> $GITHUB_ENV
+      - name: Update build.yaml default version
+        uses: fjogeleit/yaml-update-action@main
+        with:
+          valueFile: 'build.yaml'
+          workDir: './github/workflows/build.yaml'
+          propertyPath: 'on.workflow_dispatch.inputs.build_version.default'
+          targetBranch: "main"
+          branch: update_next_ver_${{steps.calc.outputs.NEXT_VER}} 
+          value: ${{steps.calc.outputs.NEXT_VER}}
+          message: 'Update next default version to ${{ steps.calc.outputs.NEXT_VER }}' 
+          
+      

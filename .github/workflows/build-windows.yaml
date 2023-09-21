@@ -1,0 +1,95 @@
+name: Build Windows App
+# Controls when the workflow will run
+on:
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+    inputs:
+        build_type:
+            type: choice
+            description: Build type
+            options:
+                - debug
+                - release
+            required: true
+            default: 'debug'
+        version_number:
+            description: App version number
+            required: true
+            type: number
+            default: 1.0.0
+
+  workflow_call:
+    inputs:
+        build_type:
+          type: string
+          description: Build type
+          required: true
+        version_number:
+            description: App version number
+            required: true
+            type: string
+    outputs:
+      windows-exe-path: 
+        description: Windows exe path
+        value: ${{jobs.build-exe.outputs.windows-exe-path}}
+
+jobs:
+  build-exe:
+    runs-on: Windows
+    env:
+        # TODO: Change this variable name.
+        TC_BUILD_NUMBER: ${{github.run_number}}
+    outputs:
+      windows-exe-path: ${{ steps.build-exe.outputs.windowsExePath }}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Echo inputs
+        run: |
+          echo ${{inputs.version_number}}
+          echo ${{inputs}}
+          echo ${{inputs.build_type}}
+          echo ${{github.run_number}}
+      - name: Check and create directory
+        run: |
+          $path = "C:\opt\banban\app.1dmy.com\partying\exe"
+          if(-not(Test-Path -Path $path))
+          {
+              New-Item -ItemType Directory -Path $path
+          }
+          
+      - name: Remove ci directory if it exists
+        run: Remove-Item -Path ci -Recurse -Force
+
+      - name: Clone CI repository
+        run: git clone -b main --depth 1 git@github.com:olachat/pt-ci-windows.git ci
+
+      - name: Get Flutter dependencies
+        run: |
+          flutter --version
+          flutter pub get
+      - name: Building Windows exe
+        id: build-exe
+        run: |
+          cd ci
+          .\partying-build.bat ${{inputs.version_number}} ${{inputs.build_type}} ${{github.run_number}}
+  notify-slack:
+    runs-on: Windows
+    needs: [build-exe]
+    if: ${{ !failure() && !cancelled()  && (inputs.build_type != 'store')}}
+    env:
+        VERSION_NAME: ${{inputs.version_number}}
+        BUILD_TYPE: ${{inputs.build_type}}
+        TC_BUILD_NUMBER: ${{github.run_number}}
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: ^1.17
+      - name: Remove ci directory if it exists
+        run: Remove-Item -Path ci -Recurse -Force
+      - name: Clone CI repository
+        run: git clone -b main --depth 1 git@github.com:olachat/pt-ci-windows.git ci
+      - name: Notify slack
+        run: .\ci\notify.ps1

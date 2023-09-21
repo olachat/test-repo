@@ -1,0 +1,48 @@
+name: Sync to official site
+run-name: "Sync Apk from Google Play to Official Site"
+
+
+# https://download.partying.tw/app/app.apk
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_code:
+        description: App version code (eg 180)
+        required: false
+        type: number
+
+jobs:
+  sync:
+    runs-on:  [self-hosted, macOS]
+    steps:
+      - uses: actions/checkout@v3
+      - name: Downloading universal apk
+        id: download
+        uses: olachat/flutter-ci-cd-action@main
+        env:
+          PLAYSTORE_JSON_KEY_DATA: "${{ secrets.PLAYSTORE_JSON_KEY_DATA }}"
+        with:
+          action: download_universal_apk
+          build_number: "${{inputs.version_code}}"
+      - name: Upload to Official Site via Aliyun OSS
+        id: upload_to_oss
+        uses: tvrcgo/upload-to-oss@v0.1.1
+        with:
+          key-id: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          key-secret: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          region: oss-ap-southeast-1
+          bucket: pt-dist
+          asset-path: ${{ steps.download.outputs.android-download-url }}
+          target-path: /app/app.apk
+
+      - name: Notify slack
+        uses: slackapi/slack-github-action@v1.24.0
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.COACHELLA_SLACK_BOT_TOKEN }}
+        with:
+          channel-id: ${{ vars.SLACK_DEPLOY_CHANNEL_ID }}
+          payload: |
+              {
+                "text": "Latest Google Play version now on official website"
+              }

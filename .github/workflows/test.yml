@@ -1,0 +1,27 @@
+name: Run tests
+
+# Controls when the workflow will run
+on:
+  pull_request:
+
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on:  [self-hosted, macOS]
+    steps:
+      - name: Checkout code to detached head
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Run tests
+        run: |
+          FLUTTER_BIN_PATH=/Users/ci/flutter/bin
+          export PATH=/opt/homebrew/bin:$FLUTTER_BIN_PATH:$PATH
+          mkdir -p .dart_tool
+          touch ./.dart_tool/.i18nstamp
+          ./tools/intl_cli/intl_cli -p .
+          flutter test test/ --no-sound-null-safety -j, --concurrency=1 -r github

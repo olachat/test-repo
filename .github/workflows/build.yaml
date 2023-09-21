@@ -1,0 +1,277 @@
+name: Build app
+run-name: "Build for ${{inputs.platform}} : Version ${{inputs.build_version}} on ${{github.ref_name}} Branch by ${{github.actor}}"
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        type: choice
+        description: Build type
+        options:
+          - debug
+          - release
+        required: true
+        default: "debug"
+      platform:
+        description: Build for platform(s).
+        required: true
+        type: choice
+        options:
+          - android
+          - ios
+          - both
+        default: "both"
+      build_version:
+        description: App version (eg 3.7.0)
+        required: false
+        type: string
+        default: "5.12.0"
+      enable_debug_mode:
+        description: Enable debug mode
+        required: false
+        type: boolean
+        default: false
+      # build_number:
+      #   description: Version code for android and version number for ios
+      #   required: false
+      #   type: number
+      android_target_platform:
+        description: Android target platforms
+        required: false
+        type: choice
+        options:
+          - android-arm64
+          - armeabi-v7a;arm64-v8a
+        default: "android-arm64"
+
+jobs:
+  start-notify-slack:
+    name: "Notifying build start on slack"
+    outputs:
+      ts: ${{ steps.notify.outputs.ts }}
+    runs-on:
+      group: client
+    steps:
+      - name: Notify slack
+        id: notify
+        uses: slackapi/slack-github-action@v1.24.0
+        env: 
+          SLACK_BOT_TOKEN: ${{ secrets.COACHELLA_SLACK_BOT_TOKEN }}
+        with:
+          channel-id: ${{vars.SLACK_CHANNEL_ID}} #partying-app-bot
+          payload: |
+            {
+              "text": "Starting build",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "Build ${{github.run_number}}"
+                  }
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "<https://github.com/olachat/partying-app/actions/runs/${{github.run_id}}|Build ${{github.run_number}}> *${{inputs.build_type}}* `${{inputs.build_version}}` on platform `${{inputs.platform}}` triggered by `${{github.actor}}` has started"
+                  }
+                },
+                {
+                  "type": "image",
+                  "image_url": "https://media4.giphy.com/media/v1.Y2lkPTc5MGI3NjExb2o4a2d1d3dnODg2YnRwajNzbTRtMmhjc2xnbHI2YmMxNjVrb3hlcyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/c2L4d43F1syaoNpkvC/giphy.gif",
+                  "alt_text": "Build starting!"
+                }
+              ]
+            }
+
+  build-apk:
+    runs-on:  [self-hosted, macOS]
+    if: ${{ inputs.platform != 'ios' }}
+    outputs:
+      android-download-url: ${{ steps.build.outputs.android-download-url }} # Define the output variable
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run cicd action
+        id: build
+        uses: olachat/flutter-ci-cd-action@main
+        env:
+          PLAYSTORE_JSON_KEY_DATA: "${{ secrets.PLAYSTORE_JSON_KEY_DATA }}"
+        with:
+          build_type: ${{ inputs.build_type }}
+          build_version: ${{ inputs.build_version }}
+          platform: android
+          build_number: ${{github.run_number}}
+          enable_debug_mode: ${{ inputs.enable_debug_mode }}
+          android_target_platform: ${{ inputs.android_target_platform }}
+
+  build-ipa:
+    runs-on:  [self-hosted, mac-mini]
+    if: ${{ inputs.platform != 'android' }}
+    concurrency: ios-build # Cannot determine concurrency based on runner name. No choice but to do this in case 2 runners execute the same job
+    outputs:
+      ios-download-url: ${{ steps.build.outputs.ios-download-url }}
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run cicd action
+        id: build
+        uses: olachat/flutter-ci-cd-action@main
+        env:
+          APP_STORE_API_KEY: "${{ vars.APP_STORE_API_KEY }}"
+          APP_STORE_AUTH_KEY: "${{ secrets.APP_STORE_AUTH_KEY }}"
+        with:
+          build_type: ${{ inputs.build_type }}
+          build_version: ${{ inputs.build_version }}
+          platform: ios
+          build_number: ${{github.run_number}}
+          enable_debug_mode: ${{ inputs.enable_debug_mode }}
+
+  distribute-app:
+    runs-on:  [self-hosted, mac-mini]
+    if: ${{ !failure() && !cancelled() }}
+    needs: [build-ipa, build-apk]
+      
+    steps:
+        - name: Distributing app for beta testing
+          env: 
+            PGYER_API_KEY: ${{secrets.PGYER_API_KEY}}
+            PGYER_IOS_APP_KEY: ${{secrets.PGYER_IOS_APP_KEY}}
+            PGYER_ANDROID_APP_KEY: ${{secrets.PGYER_ANDROID_APP_KEY}}
+          run: |
+            export NVM_DIR=~/.nvm
+            source ~/.nvm/nvm.sh
+            rm -rf ci
+            git clone -b main --depth 1 git@github.com:olachat/pt-ci.git ci
+            ./ci/build_page_v2.py ${{inputs.build_type}} ${{inputs.platform}} ${{github.run_number}}
+
+  notify-slack:
+    name: "Notifying build success on slack"
+    runs-on:  [self-hosted, mac-mini]
+    needs: [distribute-app, start-notify-slack]
+    if: ${{ !failure() && !cancelled() }}
+    steps:
+        - name: Format slack message
+          id: format-slack-message
+          run: |
+            installUrl="<https://dl2.sgola.cc/beta/index.html|Download link>"
+            
+            actionRun="https://github.com/olachat/partying-app/actions/runs/$GITHUB_RUN_ID"
+
+            formattedSlackMessage="<$actionRun|Build #${{github.run_number}}>  *${{inputs.build_type}}* \`${{inputs.build_version}}\` on platform \`${{inputs.platform}}\` started by *$GITHUB_ACTOR* is successful in branch \`${{github.ref_name}}\`\n${installUrl} "
+            echo "formatted-slack-message=${formattedSlackMessage}" >> $GITHUB_OUTPUT 
+            
+        - name: Notify slack
+          uses: slackapi/slack-github-action@v1.24.0
+          env: 
+            SLACK_BOT_TOKEN: ${{ secrets.COACHELLA_SLACK_BOT_TOKEN }}
+          with:
+            channel-id: ${{vars.SLACK_CHANNEL_ID}} #partying-app-bot
+            update-ts: ${{ needs.start-notify-slack.outputs.ts }}
+            payload: |
+              {
+                "text": "${{steps.format-slack-message.outputs.formatted-slack-message}}",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "Build ${{github.run_number}} success"
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "${{steps.format-slack-message.outputs.formatted-slack-message}}"
+                    }
+                  },
+                  {
+                    "type": "image",
+                    "image_url": "https://media.tenor.com/30TFXsJZzLgAAAAC/happy-anya-spy-x-family.gif",
+                    "alt_text": "Build success"
+                  }
+                ]
+              }
+              
+  notify-slack-cancel:
+    name: "Notifying build cancel on slack"
+    runs-on: [self-hosted, mac-mini]
+        
+    needs: [distribute-app, build-apk, build-ipa, start-notify-slack]
+    if: ${{ cancelled() }}
+    steps:
+            
+        - name: Notify slack
+          uses: slackapi/slack-github-action@v1.24.0
+          env: 
+            SLACK_BOT_TOKEN: ${{ secrets.COACHELLA_SLACK_BOT_TOKEN }}
+          with:
+            channel-id: ${{vars.SLACK_CHANNEL_ID}} #partying-app-bot
+            update-ts: ${{ needs.start-notify-slack.outputs.ts }}
+            payload: |
+              {
+                "text": "Build ${{github.run_number}} cancelled",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "Build ${{github.run_number}} cancelled"
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "<https://github.com/olachat/partying-app/actions/runs/${{github.run_id}}|Build ${{github.run_number}}> *${{inputs.build_type}}* `${{inputs.build_version}}` triggered by `${{github.actor}}` has been cancelled!"
+                    }
+                  },
+                  {
+                    "type": "image",
+                    "image_url": "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExZHRtZXM0dTZzbjMwam1sYTRpZjczd2N2Z2EzdDZtNnZqeHh4cXM3bCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/uoI0SIw9XMGSHxUS8A/giphy.gif",
+                    "alt_text": "Build cancelled"
+                  }
+                ]
+              }
+
+  notify-slack-fail:
+    name: "Notifying build failure on slack"
+    runs-on: [self-hosted, mac-mini]
+    needs: [distribute-app, build-apk, build-ipa, start-notify-slack]
+    if: ${{ failure() }}
+    steps:
+            
+        - name: Notify slack
+          uses: slackapi/slack-github-action@v1.24.0
+          env: 
+            SLACK_BOT_TOKEN: ${{ secrets.COACHELLA_SLACK_BOT_TOKEN }}
+          with:
+            channel-id: ${{vars.SLACK_CHANNEL_ID}} #partying-app-bot
+            update-ts: ${{ needs.start-notify-slack.outputs.ts }}
+            payload: |
+              {
+                "text": "Build failed",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "Build ${{github.run_number}} failed"
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "<https://github.com/olachat/partying-app/actions/runs/${{github.run_id}}|Build ${{github.run_number}}> *${{inputs.build_type}}* `${{inputs.build_version}}`  triggered by `${{github.actor}}` has failed! Take a look at the logs for more details"
+                    }
+                  },
+                  {
+                    "type": "image",
+                    "image_url": "https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExZDh6N2hnbGgzeWVnNGY4d3dlOWVxbnc4cTM2djFkNTB6NWpqZjA1aSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/AVMEzyioW82VfOQMUb/giphy.gif",
+                    "alt_text": "Build failed"
+                  }
+                ]
+              }
+              
+          
+          

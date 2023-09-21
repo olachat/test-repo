@@ -1,0 +1,23 @@
+name: Add new tester device from firebase
+run-name: "Addding new device."
+
+on:
+  workflow_dispatch:
+
+jobs:
+    
+  sync:
+    runs-on:  [self-hosted, macOS]
+    steps:
+      - name: Download devices file
+        uses: olachat/flutter-ci-cd-action/helpers/download-ios-devices@main
+        with:
+          firebase_token: ${{secrets.FIREBASE_CLI_TOKEN}}
+          firebase_app_id: ${{vars.FIREBASE_IOS_PROJECTID}}
+      - name: Sync devices
+        uses: olachat/flutter-ci-cd-action/helpers/sync-device-file@main
+        with: 
+          api_key: ${{vars.APP_STORE_API_KEY}}
+          api_issuer: ${{secrets.APP_STORE_API_ISSUER}}
+          b64_auth_key: ${{secrets.APP_STORE_AUTH_KEY}}
+  

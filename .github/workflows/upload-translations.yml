@@ -1,0 +1,35 @@
+name: upload translations to crowdin
+
+# Controls when the workflow will run
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - 'beta'
+      - 'feature/crowdin-workflow' # for testing
+      
+  workflow_dispatch:
+
+jobs:
+  upload-translations:
+    runs-on:  [self-hosted, macOS]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+      - name: Run crowdin action
+        uses: olachat/fe-crowdin-action@main
+        with:
+          action: 'upload sources'
+          pat_for_workflow:  ${{ secrets.PAT_FOR_WORKFLOW }}
+          github_token: ${{ secrets.GITHUB_TOKEN }} 
+          branch: ${{ github.event.ref }}
+          relative_path: '.'
+          head_ref: ${{ github.head_ref }}
+
+
+        
+
+      
+

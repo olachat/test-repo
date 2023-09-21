@@ -1,0 +1,77 @@
+name: lint dart files
+
+# Controls when the workflow will run
+on:
+  pull_request:
+
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on:  [self-hosted, macOS]
+    steps:
+      - name: Checkout code to detached head
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 2
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Format changed dart files
+        env: 
+          PR_NUMBER: ${{ github.event.number }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=======start format ======"
+          FLUTTER_BIN_PATH=/Users/ci/flutter/bin
+          export PATH=/opt/homebrew/bin:$FLUTTER_BIN_PATH:$PATH
+
+          python3 tools/get_pr_files_changed.py
+          cat files.txt
+          changedDartFiles=$(sed '/.dart/!d' files.txt)
+          echo $changedDartFiles
+          rm -rf files.txt
+
+          changed_files=()
+          for file in $changedDartFiles 
+          do  
+            if [ -f $file ];then 
+              changed_files+=("$file")
+            fi
+          done
+          changedDartFiles="${changed_files[@]}"
+
+          [ -z "$changedDartFiles" ] && exit 0
+          echo "CHANGED_FILES=$changedDartFiles" >> $GITHUB_ENV
+          echo "FORMATED=0" >> $GITHUB_ENV
+
+          dart format --set-exit-if-changed -l 120 $changedDartFiles || echo "FORMATED=1" >> $GITHUB_ENV
+
+      - name: Add changed files and push into pr
+        if: ${{ env.FORMATED == 1 }}
+        run: |
+          git config --local user.email "Formatter@olaola.chat"
+          git config --local user.name "Formatter"
+          git add .
+          git diff-index --quiet HEAD || git commit -am "Formatted code based on Dart guidelines"
+          git push
+
+      - name: Lint changed dart files
+        if: ${{ env.FORMATED == 0 }}
+        env:
+          INPUT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_PULL_REQUEST_COMMENT: true
+          INPUT_FATAL_WARNINGS: false
+          INPUT_FATAL_PERFORMANCE: true
+          INPUT_FATAL_STYLE: false
+          INPUT_CHECK_UNUSED_FILES: false
+          INPUT_FOLDERS: "."
+          INPUT_PROJECT_NAME: "Veeka"
+        run: |
+          echo "=======start lint ======"
+          FLUTTER_BIN_PATH=/Users/ci/flutter/bin
+          export PATH=/opt/homebrew/bin:$FLUTTER_BIN_PATH:$PATH
+          export PATH=$HOME/tools:$PATH
+          [ -z "$CHANGED_FILES" ] && exit 0
+
+          vklint "$CHANGED_FILES"
